@@ -100,8 +100,8 @@ Port A, SSI0 (PA2, PA3, PA5, PA6, PA7) sends data to Nokia5110 LCD
 //#define SSID_NAME  "valvanoAP" /* Access point name to connect to */
 #define SEC_TYPE   SL_SEC_TYPE_WPA
 //#define PASSKEY    "12345678"  /* Password in case of secure AP */ 
-#define SSID_NAME  "AndrewsPhone"
-#define PASSKEY    "password"
+#define SSID_NAME  "ATTcN7ZJna"
+#define PASSKEY    "6z#gwxtwz+q+"
 #define BAUD_RATE   115200
 void UART_Init(void){
   SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
@@ -171,7 +171,12 @@ char HostName[MAX_HOSTNAME_SIZE];
 unsigned long DestinationIP;
 int SockID;
 
-void getTemp(char* buffer, char* temperature);
+void getTempServer(char* buffer, char* temperature);
+void getTempScreen(char* buffer, char* temperature);
+void GetVoltageString(float voltage, char* voltageString);
+void getTempPacket();
+void sendPacket(char* value);
+void connectToWifi();
 float static GetVoltage(void);
 
 typedef enum{
@@ -214,30 +219,86 @@ void Crash(uint32_t time){
 // 1) go to http://openweathermap.org/appid#use 
 // 2) Register on the Sign up page
 // 3) get an API key (APPID) replace the 1234567890abcdef1234567890abcdef with your APPID
-int main(void){int32_t retVal;  SlSecParams_t secParams;
-  char *pConfig = NULL; INT32 ASize = 0; SlSockAddrIn_t  Addr;
+int main(void){
   initClk();        // PLL 50 MHz
   UART_Init();      // Send data to PC, 115200 bps
   LED_Init();   		// initialize LaunchPad I/O 
   ADC0_InitSWTriggerSeq3_Ch7();
 	ST7735_InitR(INITR_REDTAB);
   UARTprintf("Weather App\n");
-  retVal = configureSimpleLinkToDefaultState(pConfig); // set policies
-  if(retVal < 0)Crash(4000000);
-  retVal = sl_Start(0, pConfig, 0);
-  if((retVal < 0) || (ROLE_STA != retVal) ) Crash(8000000);
-  secParams.Key = PASSKEY;
-  secParams.KeyLen = strlen(PASSKEY);
-  secParams.Type = SEC_TYPE; // OPEN, WPA, or WEP
-  sl_WlanConnect(SSID_NAME, strlen(SSID_NAME), 0, &secParams, 0);
-  while((0 == (g_Status&CONNECTED)) || (0 == (g_Status&IP_AQUIRED))){
-    _SlNonOsMainLoopTask();
-  }
+  connectToWifi();
   UARTprintf("Connected\n");
   while(1){
    // strcpy(HostName,"openweathermap.org");  // used to work 10/2015
     strcpy(HostName,"api.openweathermap.org"); // works 9/2016
-    retVal = sl_NetAppDnsGetHostByName(HostName,
+		getTempPacket();
+		char temperatureString[16];
+		getTempScreen(Recvbuff, temperatureString);
+		ST7735_FillScreen(0);
+		ST7735_SetCursor(0,0);
+		ST7735_OutString(temperatureString);
+		getTempServer(Recvbuff, temperatureString);
+		float voltage = GetVoltage();
+		
+		//part for sending temp and ADC to server 
+		strcpy(HostName,"ee445l-smp3224.appspot.com"); 
+		sendPacket(temperatureString);
+		char voltageString[16];
+	  GetVoltageString(voltage,voltageString);
+		sendPacket(voltageString);
+		
+    while(Board_Input()==0){}; // wait for touch
+    LED_GreenOff();
+  }
+}
+
+float static GetVoltage(void){
+  float ADCValue = (float) ADC0_InSeq3();
+  return (ADCValue * 3.3) / 4096;
+}
+
+void getTempServer(char* buffer, char* temperature){
+		char search[10] = "temp";
+		char* temp = strstr(buffer,search);
+		temp += 6;
+		char tempString[10];
+		char* tempStringP = tempString;
+		while(temp[0] != ','){
+			tempStringP[0] = temp[0];
+			tempStringP++;
+			temp++;
+		}	
+		tempStringP[0] = '\0';
+		sprintf(temperature,"%s%s%s","Temp%20%3D%20%20",tempString,"%20C");
+}
+
+void getTempScreen(char* buffer, char* temperature){
+		char search[10] = "temp";
+		char* temp = strstr(buffer,search);
+		temp += 6;
+		char tempString[10];
+		char* tempStringP = tempString;
+		while(temp[0] != ','){
+			tempStringP[0] = temp[0];
+			tempStringP++;
+			temp++;
+		}	
+		tempStringP[0] = '\0';
+		sprintf(temperature,"%s%s%s","Temp =  ",tempString, " C");
+}
+
+void GetVoltageString(float voltage, char* voltageString){
+		char tempString[10] = "";
+		sprintf(tempString, "%1.2f",voltage);
+		sprintf(voltageString,"%s%s%s","Voltage%20%3D%20%20",tempString,"%20V");
+	
+}
+
+void getTempPacket(char* HostName){
+		int32_t retVal;
+		INT32 ASize = 0; 
+	  SlSockAddrIn_t  Addr;
+		retVal = sl_NetAppDnsGetHostByName(HostName,
              strlen(HostName),&DestinationIP, SL_AF_INET);
     if(retVal == 0){
       Addr.sin_family = SL_AF_INET;
@@ -258,18 +319,16 @@ int main(void){int32_t retVal;  SlSecParams_t secParams;
         UARTprintf(Recvbuff);  UARTprintf("\r\n");
       }
     }
-		
-		char temperature[16];
-		getTemp(Recvbuff, temperature);
-		ST7735_FillScreen(0);
-		ST7735_SetCursor(0,0);
-		ST7735_OutString(temperature);
-		
-		//part for sending temp to server 
+	
+}
+
+void sendPacket(char* value){
+		int32_t retVal;
+		INT32 ASize = 0; 
+	  SlSockAddrIn_t  Addr;
 		char city[] = "Austin";
 		char name[] = "Andrew%20and%20Steven";
-		strcpy(HostName,"http://ee445l-smp3224.appspot.com/"); 
-    retVal = sl_NetAppDnsGetHostByName(HostName,
+		retVal = sl_NetAppDnsGetHostByName(HostName,
              strlen(HostName),&DestinationIP, SL_AF_INET);
     if(retVal == 0){
       Addr.sin_family = SL_AF_INET;
@@ -281,66 +340,34 @@ int main(void){int32_t retVal;  SlSecParams_t secParams;
         retVal = sl_Connect(SockID, ( SlSockAddr_t *)&Addr, ASize);
       }
       if((SockID >= 0)&&(retVal >= 0)){
-				sprintf(SendBuff, "%s%s%s%s%s%s%s" ,"GET /query?city=",city,"&id=",name,"&greet=",temperature," HTTP/1.1\r\nUser-Agent: Keil\r\nHost: embedded-systems-server.appspot.com\r\n\r\n"); 
+				sprintf(SendBuff, "%s%s%s%s%s%s%s" ,"GET /query?city=",city,"&id=",name,"&greet=",value," HTTP/1.1\r\nUser-Agent: Keil\r\nHost: ee445l-smp3224.appspot.com\r\n\r\n"); 
+				UARTprintf("%s",SendBuff);
         sl_Send(SockID, SendBuff, strlen(SendBuff), 0);// Send the HTTP GET 
         sl_Recv(SockID, Recvbuff, MAX_RECV_BUFF_SIZE, 0);// Receive response 
         sl_Close(SockID);
-				
         LED_GreenOn();
-        UARTprintf("\r\n\r\n");
-        UARTprintf(Recvbuff);  UARTprintf("\r\n");
       }
     }
-		
-    float voltage = GetVoltage();
-		strcpy(HostName,"http://ee445l-smp3224.appspot.com/"); 
-    retVal = sl_NetAppDnsGetHostByName(HostName,
-             strlen(HostName),&DestinationIP, SL_AF_INET);
-    if(retVal == 0){
-      Addr.sin_family = SL_AF_INET;
-      Addr.sin_port = sl_Htons(80);
-      Addr.sin_addr.s_addr = sl_Htonl(DestinationIP);// IP to big endian 
-      ASize = sizeof(SlSockAddrIn_t);
-      SockID = sl_Socket(SL_AF_INET,SL_SOCK_STREAM, 0);
-      if( SockID >= 0 ){
-        retVal = sl_Connect(SockID, ( SlSockAddr_t *)&Addr, ASize);
-      }
-      if((SockID >= 0)&&(retVal >= 0)){
-				sprintf(SendBuff, "%s%s%s%s%s%2.f%s" ,"GET /query?city=",city,"&id=",name,"&greet=",voltage," HTTP/1.1\r\nUser-Agent: Keil\r\nHost: embedded-systems-server.appspot.com\r\n\r\n"); 
-        sl_Send(SockID, SendBuff, strlen(SendBuff), 0);// Send the HTTP GET 
-        sl_Recv(SockID, Recvbuff, MAX_RECV_BUFF_SIZE, 0);// Receive response 
-        sl_Close(SockID);
-				
-        LED_GreenOn();
-        UARTprintf("\r\n\r\n");
-        UARTprintf(Recvbuff);  UARTprintf("\r\n");
-      }
-    }
-		
-    while(Board_Input()==0){}; // wait for touch
-    LED_GreenOff();
+}
+
+void connectToWifi(){
+	int32_t retVal;  SlSecParams_t secParams;
+  char *pConfig = NULL; 
+	retVal = configureSimpleLinkToDefaultState(pConfig); // set policies
+  if(retVal < 0)Crash(4000000);
+  retVal = sl_Start(0, pConfig, 0);
+  if((retVal < 0) || (ROLE_STA != retVal) ) Crash(8000000);
+  secParams.Key = PASSKEY;
+  secParams.KeyLen = strlen(PASSKEY);
+  secParams.Type = SEC_TYPE; // OPEN, WPA, or WEP
+  sl_WlanConnect(SSID_NAME, strlen(SSID_NAME), 0, &secParams, 0);
+  while((0 == (g_Status&CONNECTED)) || (0 == (g_Status&IP_AQUIRED))){
+    _SlNonOsMainLoopTask();
   }
 }
 
-float static GetVoltage(void){
-  float ADCValue = (float) ADC0_InSeq3();
-  return (ADCValue * 3.3) / 4096;
-}
 
-void getTemp(char* buffer, char* temperature){
-		char search[10] = "temp";
-		char* temp = strstr(buffer,search);
-		temp += 6;
-		char tempString[10];
-		char* tempStringP = tempString;
-		while(temp[0] != ','){
-			tempStringP[0] = temp[0];
-			tempStringP++;
-			temp++;
-		}	
-		tempStringP[0] = '\0';
-		sprintf(temperature,"Temp =  %s C",tempString);
-}
+
 
 /*!
     \brief This function puts the device in its default state. It:
